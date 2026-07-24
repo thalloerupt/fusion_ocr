@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ort = { version = "2.0.0-rc.12", features = ["cuda"] }
+ort = { version = "2.0.0-rc.12" }
 image = "0.25"
 imageproc = "0.25"
 ab_glyph = "0.2"
