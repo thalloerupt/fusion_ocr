@@ -93,6 +93,7 @@ impl LayoutClassConfig {
             text: true,
             doc_title: true,
             r#abstract: true,
+            figure_title:true,
             ..Self::none()
         }
     }
