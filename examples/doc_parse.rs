@@ -12,7 +12,7 @@ use std::{error::Error, fs, time::Instant};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let total_start = Instant::now();
-    let image = image::open("assets/Page_5_docsmall.com.jpg")?.to_rgb8();
+    let image = image::open("assets/Page_1_docsmall.com.jpg")?.to_rgb8();
     fs::create_dir_all("outputs")?;
 
     let paths = FusionOcrModelPaths::new("models/PP-DocLayout_plus-L.onnx")

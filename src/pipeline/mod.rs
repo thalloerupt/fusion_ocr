@@ -91,6 +91,8 @@ impl LayoutClassConfig {
         Self {
             paragraph_title: true,
             text: true,
+            doc_title: true,
+            r#abstract: true,
             ..Self::none()
         }
     }
