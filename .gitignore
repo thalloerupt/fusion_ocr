@@ -1,3 +1,5 @@
 /target
-/models/
+/models/*
+!/models/ppocrv6_tiny_dict.txt
+!/models/unimernet_tokens.txt
 /outputs/
