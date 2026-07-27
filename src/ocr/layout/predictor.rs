@@ -64,7 +64,8 @@ impl LayoutPredictor {
         model_path: P,
         threshold: f32,
     ) -> Result<Self, Box<dyn Error>> {
-        let session = crate::ocr::session_builder()?
+        // layout 与 det 并行运行（见 pipeline），各占一半逻辑核，避免过度订阅。
+        let session = crate::ocr::session_builder((crate::ocr::available_threads() / 2).max(1))?
             .with_optimization_level(GraphOptimizationLevel::All)?
             .commit_from_file(model_path)?;
         Ok(Self { session, threshold })
@@ -82,13 +83,12 @@ impl LayoutPredictor {
             FilterType::Triangle,
         );
         let mut image = Array4::<f32>::zeros((1, 3, INPUT_SIZE, INPUT_SIZE));
-        for y in 0..INPUT_SIZE {
-            for x in 0..INPUT_SIZE {
-                let p = resized.get_pixel(x as u32, y as u32);
-                image[[0, 0, y, x]] = p[2] as f32 / 255.0; // B
-                image[[0, 1, y, x]] = p[1] as f32 / 255.0; // G
-                image[[0, 2, y, x]] = p[0] as f32 / 255.0; // R
-            }
+        let plane = INPUT_SIZE * INPUT_SIZE;
+        let buf = image.as_slice_mut().expect("Array4::zeros 是连续内存");
+        for (i, px) in resized.as_raw().chunks_exact(3).enumerate() {
+            buf[i] = px[2] as f32 / 255.0; // B
+            buf[plane + i] = px[1] as f32 / 255.0; // G
+            buf[2 * plane + i] = px[0] as f32 / 255.0; // R
         }
         let im_shape =
             Array2::<f32>::from_shape_vec((1, 2), vec![INPUT_SIZE as f32, INPUT_SIZE as f32])?;

@@ -25,7 +25,9 @@ pub struct TextRecognizer {
 impl TextRecognizer {
     /// 从 ONNX 模型文件与字典文件创建识别器。
     pub fn new<P: AsRef<Path>>(model_path: P, dict_path: P) -> Result<Self, Box<dyn Error>> {
-        let session = crate::ocr::session_builder()?.commit_from_file(model_path)?;
+        // rec 独占阶段运行，占满全部逻辑核。
+        let session = crate::ocr::session_builder(crate::ocr::available_threads())?
+            .commit_from_file(model_path)?;
         let compact_output = session.outputs().iter().any(|o| o.name() == "token_ids");
         let dict = std::fs::read_to_string(dict_path)?
             .lines()
@@ -142,14 +144,12 @@ impl TextRecognizer {
             ((INPUT_HEIGHT as f32 * w as f32 / h as f32).round() as u32).clamp(1, MAX_INPUT_WIDTH);
         let resized = image::imageops::resize(img, resized_w, INPUT_HEIGHT, FilterType::Triangle);
         let (rw, rh) = (resized_w as usize, INPUT_HEIGHT as usize);
-        let mut data = vec![0.0f32; 3 * rh * rw];
-        for row in 0..rh {
-            for col in 0..rw {
-                let p = resized.get_pixel(col as u32, row as u32);
-                data[(0 * rh + row) * rw + col] = (p[2] as f32 / 255.0 - 0.5) / 0.5; // B
-                data[(1 * rh + row) * rw + col] = (p[1] as f32 / 255.0 - 0.5) / 0.5; // G
-                data[(2 * rh + row) * rw + col] = (p[0] as f32 / 255.0 - 0.5) / 0.5; // R
-            }
+        let plane = rh * rw;
+        let mut data = vec![0.0f32; 3 * plane];
+        for (i, px) in resized.as_raw().chunks_exact(3).enumerate() {
+            data[i] = (px[2] as f32 / 255.0 - 0.5) / 0.5; // B
+            data[plane + i] = (px[1] as f32 / 255.0 - 0.5) / 0.5; // G
+            data[2 * plane + i] = (px[0] as f32 / 255.0 - 0.5) / 0.5; // R
         }
         (rw, data)
     }

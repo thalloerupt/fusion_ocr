@@ -9,3 +9,7 @@ image = "0.25"
 imageproc = "0.25"
 ab_glyph = "0.2"
 ndarray = "0.17"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

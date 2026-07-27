@@ -3,13 +3,17 @@
 use crate::ocr::{
     formula::recognition::FormulaRecognizer,
     layout::predictor::{LABELS, LayoutBox, LayoutPredictor},
-    text::{detection::TextDetector, recognition::TextRecognizer},
+    text::{
+        detection::{TextDetector, TextLine},
+        recognition::TextRecognizer,
+    },
 };
 use image::RgbImage;
 use std::{
     error::Error,
     fmt,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 pub type FusionOcrResult<T> = Result<T, Box<dyn Error>>;
@@ -276,6 +280,14 @@ pub struct FusionOcrParagraph {
     pub content: String,
 }
 
+/// 最近一次 `recognize` 各阶段耗时（未执行的阶段为 0）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StageTiming {
+    pub layout: Duration,
+    pub detect: Duration,
+    pub recognize: Duration,
+}
+
 /// 已加载模型的 OCR 引擎。可跨多张图片复用，避免重复加载 Session。
 pub struct FusionOcr {
     config: FusionOcrConfig,
@@ -283,6 +295,7 @@ pub struct FusionOcr {
     text_detector: Option<TextDetector>,
     text_recognizer: Option<TextRecognizer>,
     formula_recognizer: Option<FormulaRecognizer>,
+    last_timing: StageTiming,
 }
 
 impl FusionOcr {
@@ -320,20 +333,50 @@ impl FusionOcr {
             text_detector,
             text_recognizer,
             formula_recognizer,
+            last_timing: StageTiming::default(),
         })
     }
 
+    /// 最近一次 `recognize` 的各阶段耗时。
+    pub fn last_timing(&self) -> StageTiming {
+        self.last_timing
+    }
+
     pub fn recognize(&mut self, image: &RgbImage) -> FusionOcrResult<Vec<FusionOcrParagraph>> {
-        let mut regions: Vec<LayoutBox> = self
-            .layout
-            .predict(image)?
+        self.last_timing = StageTiming::default();
+        // layout 与 det 相互独立（都以整页图像为输入），并行运行。
+        // 两个 Session 各占一半逻辑核（见各构造函数），不会过度订阅。
+        let layout = &mut self.layout;
+        let text_detector = &mut self.text_detector;
+        let scoped = std::thread::scope(|s| {
+            let layout_handle = s.spawn(|| {
+                let start = Instant::now();
+                let result = layout.predict(image).map_err(|e| e.to_string());
+                (result, start.elapsed())
+            });
+            let det_start = Instant::now();
+            let lines = match text_detector.as_mut() {
+                Some(detector) => detector.detect(image).map_err(|e| e.to_string()),
+                None => Ok(Vec::new()),
+            };
+            let det_elapsed = det_start.elapsed();
+            let (layout_result, layout_elapsed) = layout_handle
+                .join()
+                .map_err(|_| "layout thread panicked".to_string())?;
+            Ok::<_, String>((layout_result?, lines?, layout_elapsed, det_elapsed))
+        });
+        let (layout_boxes, lines, layout_elapsed, det_elapsed) = scoped.map_err(PipelineError)?;
+        self.last_timing.layout = layout_elapsed;
+        self.last_timing.detect = det_elapsed;
+
+        let mut regions: Vec<LayoutBox> = layout_boxes
             .into_iter()
             .filter(|region| self.config.classes.is_enabled(region.label))
             .collect();
         regions.sort_by(reading_order);
 
         let mut contents = vec![String::new(); regions.len()];
-        self.recognize_text_regions(image, &regions, &mut contents)?;
+        self.recognize_text_regions(image, &regions, &lines, &mut contents)?;
         self.recognize_formula_regions(image, &regions, &mut contents)?;
 
         Ok(regions
@@ -351,6 +394,7 @@ impl FusionOcr {
         &mut self,
         image: &RgbImage,
         regions: &[LayoutBox],
+        lines: &[TextLine],
         contents: &mut [String],
     ) -> FusionOcrResult<()> {
         let text_regions: Vec<usize> = regions
@@ -367,11 +411,6 @@ impl FusionOcr {
             .text_recognizer
             .as_mut()
             .expect("text models validated in new");
-        let lines = if let Some(detector) = self.text_detector.as_mut() {
-            detector.detect(image)?
-        } else {
-            Vec::new()
-        };
         let mut assigned: Vec<Vec<usize>> = (0..regions.len()).map(|_| Vec::new()).collect();
         for (line_index, line) in lines.iter().enumerate() {
             let cx = (line.bbox[0] + line.bbox[2]) / 2.0;
@@ -405,7 +444,9 @@ impl FusionOcr {
             }
         }
 
+        let recognize_start = Instant::now();
         let recognized = recognizer.recognize_batch(&crops)?;
+        self.last_timing.recognize = recognize_start.elapsed();
         let mut lines_by_region: Vec<Vec<String>> =
             (0..regions.len()).map(|_| Vec::new()).collect();
         for (owner, (text, confidence)) in owners.into_iter().zip(recognized) {

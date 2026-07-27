@@ -53,11 +53,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("recognized {} configured regions", results.len());
     println!("saved outputs/doc_parse_result.jpg and outputs/doc_parse_result.md");
     println!("\n--- Markdown ---\n{markdown}");
+    let timing = ocr.last_timing();
     println!(
-        "[timing] init: {:.0?}, recognize: {:.0?}, total: {:.0?}",
+        "[timing] init: {:.3?}, recognize: {:.3?}, total: {:.3?}",
         init_elapsed,
         recognize_elapsed,
         total_start.elapsed()
+    );
+    println!(
+        "[timing] layout: {:.3?}, det: {:.3?}, rec: {:.3?}",
+        timing.layout, timing.detect, timing.recognize
     );
     Ok(())
 }

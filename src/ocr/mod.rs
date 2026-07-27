@@ -7,10 +7,18 @@ use ort::{
     session::{Session, builder::SessionBuilder},
 };
 
-/// 创建统一配置的 SessionBuilder：CUDA 优先（注册失败时静默回退 CPU），开启图优化。
-pub(crate) fn session_builder() -> ort::Result<SessionBuilder> {
+/// 可用逻辑核数。
+pub(crate) fn available_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8)
+}
+
+/// 创建统一配置的 CPU SessionBuilder：指定 intra-op 线程数，开启图优化。
+pub(crate) fn session_builder(intra_threads: usize) -> ort::Result<SessionBuilder> {
     Ok(Session::builder()?
-        .with_execution_providers([ep::CUDA::default().build(), ep::CPU::default().build()])?
+        .with_execution_providers([ep::CPU::default().build()])?
+        .with_intra_threads(intra_threads.max(1))?
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::All)?)
 }
 

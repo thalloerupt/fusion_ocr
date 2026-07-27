@@ -11,6 +11,9 @@ use std::{error::Error, path::Path};
 const LIMIT_SIDE_LEN: u32 = 736;
 /// 缩放后长边上界（与 yml 中 trt_dynamic_shapes 上限一致）。
 const MAX_SIDE_LEN: u32 = 4000;
+/// 默认长边上限：大图先按比例缩小再送检，CPU 上推理/后处理成倍加速。
+/// 比 PaddleOCR 官方默认 960 保守，降低小字漏检风险。
+const DEFAULT_MAX_DET_SIDE: u32 = 1280;
 /// NormalizeImage 参数（yml）。
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STD: [f32; 3] = [0.229, 0.224, 0.225];
@@ -37,12 +40,15 @@ pub struct TextDetector {
     max_candidates: usize,
     /// 最短边下限（DBPostProcess 默认 3）。
     min_box_size: f32,
+    /// 送检图像长边上限。
+    max_det_side: u32,
 }
 
 impl TextDetector {
     /// 从 ONNX 模型文件创建检测器，后处理参数取自 yml。
     pub fn new<P: AsRef<Path>>(model_path: P) -> Result<Self, Box<dyn Error>> {
-        let session = crate::ocr::session_builder()?
+        // det 与 layout 并行运行（见 pipeline），各占一半逻辑核，避免过度订阅。
+        let session = crate::ocr::session_builder((crate::ocr::available_threads() / 2).max(1))?
             .with_optimization_level(GraphOptimizationLevel::All)?
             .commit_from_file(model_path)?;
         Ok(Self {
@@ -52,7 +58,15 @@ impl TextDetector {
             unclip_ratio: 1.4,
             max_candidates: 3000,
             min_box_size: 3.0,
+            max_det_side: DEFAULT_MAX_DET_SIDE,
         })
+    }
+
+    /// 设置送检图像长边上限（默认 [`DEFAULT_MAX_DET_SIDE`]）。
+    /// 调大可提升大图中小字的召回，调小则更快。
+    pub fn with_max_det_side(mut self, max_det_side: u32) -> Self {
+        self.max_det_side = max_det_side.clamp(LIMIT_SIDE_LEN, MAX_SIDE_LEN);
+        self
     }
 
     /// 检测图像中的文本行，按阅读顺序（自上而下、自左而右）返回。
@@ -62,20 +76,19 @@ impl TextDetector {
             return Ok(Vec::new());
         }
 
-        // Preprocess: DetResizeForTest（短边对齐 LIMIT_SIDE_LEN，边长取 32 的倍数）
-        let (resized_w, resized_h) = resize_for_test(orig_w, orig_h);
+        // Preprocess: DetResizeForTest（短边对齐 LIMIT_SIDE_LEN，长边不超过 max_det_side，边长取 32 的倍数）
+        let (resized_w, resized_h) = resize_for_test(orig_w, orig_h, self.max_det_side);
         let resized = image::imageops::resize(img, resized_w, resized_h, FilterType::Triangle);
 
         // NormalizeImage(BGR, mean/std) -> ToCHWImage
         let (rw, rh) = (resized_w as usize, resized_h as usize);
         let mut x = Array4::<f32>::zeros((1, 3, rh, rw));
-        for row in 0..rh {
-            for col in 0..rw {
-                let p = resized.get_pixel(col as u32, row as u32);
-                for c in 0..3 {
-                    x[[0, c, row, col]] = (p[2 - c] as f32 / 255.0 - MEAN[c]) / STD[c];
-                }
-            }
+        let plane = rh * rw;
+        let buf = x.as_slice_mut().expect("Array4::zeros 是连续内存");
+        for (i, px) in resized.as_raw().chunks_exact(3).enumerate() {
+            buf[i] = (px[2] as f32 / 255.0 - MEAN[0]) / STD[0]; // B
+            buf[plane + i] = (px[1] as f32 / 255.0 - MEAN[1]) / STD[1]; // G
+            buf[2 * plane + i] = (px[0] as f32 / 255.0 - MEAN[2]) / STD[2]; // R
         }
 
         let outputs = self.session.run(inputs!["x" => Tensor::from_array(x)?])?;
@@ -167,13 +180,17 @@ fn sort_reading_order(lines: &mut [TextLine]) {
     }
 }
 
-/// DetResizeForTest（limit_type = "min"）：短边不足 LIMIT_SIDE_LEN 时放大，边长对齐 32。
-fn resize_for_test(w: u32, h: u32) -> (u32, u32) {
-    let ratio = if w.min(h) < LIMIT_SIDE_LEN {
+/// DetResizeForTest（limit_type = "min"）：短边不足 LIMIT_SIDE_LEN 时放大，
+/// 长边超过 max_det_side 时缩小，边长对齐 32。
+fn resize_for_test(w: u32, h: u32, max_det_side: u32) -> (u32, u32) {
+    let mut ratio = if w.min(h) < LIMIT_SIDE_LEN {
         LIMIT_SIDE_LEN as f32 / w.min(h) as f32
     } else {
         1.0
     };
+    if (w.max(h) as f32 * ratio) > max_det_side as f32 {
+        ratio = max_det_side as f32 / w.max(h) as f32;
+    }
     let mut rw = ((w as f32 * ratio) / 32.0).round().max(1.0) as u32 * 32;
     let mut rh = ((h as f32 * ratio) / 32.0).round().max(1.0) as u32 * 32;
     if rw.max(rh) > MAX_SIDE_LEN {
