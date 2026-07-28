@@ -15,7 +15,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let image = image::open("assets/Page_1_docsmall.com.jpg")?.to_rgb8();
     fs::create_dir_all("outputs")?;
 
-    let paths = FusionOcrModelPaths::new("models/PP-DocLayout_plus-L.onnx")
+    // 可通过第一个命令行参数指定 layout 模型（默认 FP32，可传 int8 量化版对比）
+    let layout_model = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "models/PP-DocLayout_plus-L.onnx".to_string());
+    println!("layout model: {layout_model}");
+    let paths = FusionOcrModelPaths::new(layout_model)
         .with_text(
             "models/PP-OCRv6_tiny_det.onnx",
             "models/PP-OCRv6_tiny_rec_compact.onnx",

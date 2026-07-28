@@ -97,7 +97,7 @@ impl LayoutClassConfig {
             text: true,
             doc_title: true,
             r#abstract: true,
-            figure_title:true,
+            figure_title: true,
             ..Self::none()
         }
     }
@@ -502,7 +502,6 @@ fn is_single_line_label(label: &str) -> bool {
         label,
         "paragraph_title"
             | "number"
-            | "figure_title"
             | "doc_title"
             | "footnote"
             | "header"
@@ -519,7 +518,13 @@ fn is_text_label(label: &str) -> bool {
 fn is_multiline_text_label(label: &str) -> bool {
     matches!(
         label,
-        "text" | "abstract" | "content" | "reference" | "aside_text" | "reference_content"
+        "text"
+            | "abstract"
+            | "content"
+            | "figure_title"
+            | "reference"
+            | "aside_text"
+            | "reference_content"
     )
 }
 
@@ -527,10 +532,10 @@ fn markdown_text(label: &str, lines: &[String]) -> String {
     if lines.is_empty() {
         return String::new();
     }
-    if matches!(label, "paragraph_title" | "doc_title") {
-        format!("## {}", lines.join(" "))
-    } else {
-        lines.join("\n")
+    match label {
+        "doc_title" => format!("# {}", lines.join(" ")),
+        "paragraph_title" => format!("## {}", lines.join(" ")),
+        _ => lines.join("\n"),
     }
 }
 
@@ -563,12 +568,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn basic_enables_only_title_and_text() {
+    fn basic_enables_core_labels() {
         let classes = LayoutClassConfig::basic();
         for label in LABELS {
             assert_eq!(
                 classes.is_enabled(label),
-                matches!(label, "paragraph_title" | "text")
+                matches!(
+                    label,
+                    "paragraph_title" | "text" | "doc_title" | "abstract" | "figure_title"
+                )
             );
         }
     }
@@ -583,6 +591,7 @@ mod tests {
 
     #[test]
     fn markdown_formats_titles() {
+        assert_eq!(markdown_text("doc_title", &["Hello".into()]), "# Hello");
         assert_eq!(
             markdown_text("paragraph_title", &["Hello".into()]),
             "## Hello"
@@ -617,6 +626,14 @@ mod tests {
         let classes = LayoutClassConfig::none().with_enabled("paragraph_title", true);
         assert!(classes.needs_rec_model());
         assert!(!classes.needs_det_model());
+    }
+
+    #[test]
+    fn figure_title_is_recognized_when_enabled() {
+        // 图注可能跨多行（如 "Figure 1. ..."），需要 det 逐行检测后再 rec。
+        let classes = LayoutClassConfig::none().with_enabled("figure_title", true);
+        assert!(classes.needs_rec_model());
+        assert!(classes.needs_det_model());
     }
 
     #[test]
