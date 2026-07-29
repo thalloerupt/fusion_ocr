@@ -265,7 +265,7 @@ impl Default for FusionOcrConfig {
     fn default() -> Self {
         Self {
             classes: LayoutClassConfig::basic(),
-            layout_confidence_threshold: 0.5,
+            layout_confidence_threshold: 0.4,
             rec_confidence_threshold: 0.0,
             rec_batch_size: 8,
         }
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn default_thresholds_and_batch_size() {
         let config = FusionOcrConfig::default();
-        assert_eq!(config.layout_confidence_threshold, 0.5);
+        assert_eq!(config.layout_confidence_threshold, 0.4);
         assert_eq!(config.rec_confidence_threshold, 0.0);
         assert_eq!(config.rec_batch_size, 8);
     }

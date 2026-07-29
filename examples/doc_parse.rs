@@ -12,7 +12,7 @@ use std::{error::Error, fs, time::Instant};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let total_start = Instant::now();
-    let image = image::open("assets/Page_1_docsmall.com.jpg")?.to_rgb8();
+    let image = image::open("assets/1706.03762v7_page_001.jpg")?.to_rgb8();
     fs::create_dir_all("outputs")?;
 
     // 可通过第一个命令行参数指定 layout 模型（默认 FP32，可传 int8 量化版对比）

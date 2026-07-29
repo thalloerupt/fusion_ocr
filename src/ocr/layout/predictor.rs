@@ -131,6 +131,79 @@ impl LayoutPredictor {
                 bbox: [x1, y1, x2, y2],
             });
         }
-        Ok(results)
+        Ok(deduplicate_overlapping_boxes(results))
+    }
+}
+
+/// RT-DETR 可能为同一个区域输出多个不同类别。对于位置几乎相同的候选框，
+/// 只保留置信度最高的一个；普通的相交或嵌套区域不受影响。
+fn deduplicate_overlapping_boxes(mut boxes: Vec<LayoutBox>) -> Vec<LayoutBox> {
+    const DUPLICATE_IOU_THRESHOLD: f32 = 0.9;
+
+    boxes.sort_by(|a, b| b.score.total_cmp(&a.score));
+    let mut kept: Vec<LayoutBox> = Vec::with_capacity(boxes.len());
+    for candidate in boxes {
+        if kept.iter().any(|existing| {
+            intersection_over_union(candidate.bbox, existing.bbox) >= DUPLICATE_IOU_THRESHOLD
+        }) {
+            continue;
+        }
+        kept.push(candidate);
+    }
+    kept
+}
+
+fn intersection_over_union(a: [f32; 4], b: [f32; 4]) -> f32 {
+    let intersection_width = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
+    let intersection_height = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    let intersection = intersection_width * intersection_height;
+    if intersection <= 0.0 {
+        return 0.0;
+    }
+
+    let area_a = (a[2] - a[0]) * (a[3] - a[1]);
+    let area_b = (b[2] - b[0]) * (b[3] - b[1]);
+    intersection / (area_a + area_b - intersection)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout_box(label_id: usize, score: f32, bbox: [f32; 4]) -> LayoutBox {
+        LayoutBox {
+            label_id,
+            label: LABELS[label_id],
+            score,
+            bbox,
+        }
+    }
+
+    #[test]
+    fn overlapping_candidates_keep_only_highest_confidence() {
+        let boxes = vec![
+            layout_box(10, 0.67, [100.0, 100.0, 500.0, 160.0]),
+            layout_box(12, 0.66, [100.0, 100.0, 500.0, 160.0]),
+            layout_box(2, 0.60, [102.0, 101.0, 498.0, 159.0]),
+        ];
+
+        let kept = deduplicate_overlapping_boxes(boxes);
+
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].label, "doc_title");
+        assert_eq!(kept[0].score, 0.67);
+    }
+
+    #[test]
+    fn distinct_and_partially_overlapping_regions_are_preserved() {
+        let boxes = vec![
+            layout_box(2, 0.90, [0.0, 0.0, 100.0, 100.0]),
+            layout_box(4, 0.80, [50.0, 50.0, 150.0, 150.0]),
+            layout_box(0, 0.70, [0.0, 120.0, 100.0, 160.0]),
+        ];
+
+        let kept = deduplicate_overlapping_boxes(boxes);
+
+        assert_eq!(kept.len(), 3);
     }
 }
