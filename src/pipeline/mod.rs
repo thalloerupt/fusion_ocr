@@ -433,7 +433,10 @@ impl FusionOcr {
         let mut owners = Vec::new();
         for &region_index in &text_regions {
             let region = &regions[region_index];
-            if is_single_line_label(region.label) || assigned[region_index].is_empty() {
+            // 版面类别描述的是语义，并不能保证区域确实只有一行。例如版权声明
+            // 可能被误判成 doc_title。只要文字检测器找到了行，就逐行识别，
+            // 避免把多行区域整体压缩到单行识别模型的 48px 输入高度。
+            if assigned[region_index].is_empty() {
                 crops.push(crop(image, region.bbox));
                 owners.push(region_index);
             } else {
